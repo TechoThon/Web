@@ -1,21 +1,50 @@
 import './style.css';
-import { PR_REVIEWS, MISSIONS, FIELDS } from './data.js';
+import { searchReviews, getTracks, getMissions } from './api.js';
+import { trackLabel, missionDisplayName, missionIcon, FALLBACK_TRACKS } from './data.js';
 
-const PAGE_SIZE = 3;
+const PAGE_SIZE = 5;
 
 const state = {
-  field: 'backend',
-  mission: null,
+  track: null,      // 선택된 트랙 (API 값, e.g. 'BACKEND')
+  mission: null,    // 선택된 미션 슬러그 (e.g. 'roomescape')
   search: '',
+  tracks: [],       // TrackOption[] — /api/tracks 응답
+  missions: [],     // MissionOption[] — /api/missions 응답
+  results: null,    // SearchResponse | null
+  loading: false,
+  error: null,
   displayCount: PAGE_SIZE,
 };
 
 // ─── 초기화 ─────────────────────────────────────────────────────────────────
 
-function init() {
+async function init() {
   document.getElementById('app').innerHTML = buildLayout();
   attachEventListeners();
   renderResults();
+  await loadTracks();
+}
+
+async function loadTracks() {
+  try {
+    state.tracks = await getTracks();
+  } catch {
+    state.tracks = FALLBACK_TRACKS;
+  }
+  if (state.tracks.length > 0) {
+    state.track = state.tracks[0].track;
+  }
+  refreshFilterButtons();
+  await loadMissions();
+}
+
+async function loadMissions() {
+  try {
+    state.missions = await getMissions(state.track);
+  } catch {
+    state.missions = [];
+  }
+  refreshFilterButtons();
 }
 
 // ─── 레이아웃 ────────────────────────────────────────────────────────────────
@@ -23,14 +52,45 @@ function init() {
 function buildLayout() {
   return `
     <div class="w-[1440px] min-h-screen bg-white text-[#1A1A1A] mx-auto">
-      ${buildHeader()}
+      <header class="sticky top-0 z-50 w-full h-[80px] bg-white/80 backdrop-blur-md border-b border-[#EEEEEE] flex items-center justify-between px-[80px]">
+        <div class="flex items-center gap-2">
+          <div class="w-10 h-10 bg-black rounded-xl flex items-center justify-center">
+            <i class="fa-solid fa-code-pull-request text-white text-xl"></i>
+          </div>
+          <span class="text-xl font-bold tracking-tight">PR Insight</span>
+        </div>
+      </header>
+
       <main class="px-[80px] py-[60px]">
-        ${buildSearchSection()}
-        ${buildFilterSection()}
+        <section class="mb-[64px]">
+          <h1 class="text-[42px] font-bold mb-4 leading-tight">리뷰어들은 이 질문에<br>어떻게 답변했을까요?</h1>
+          <p class="text-[18px] text-[#666666] mb-10">키워드를 입력하여 수천 개의 PR 속에 담긴 리뷰어의 인사이트를 찾아보세요.</p>
+          <div class="relative w-full max-w-[800px]">
+            <i class="fa-solid fa-magnifying-glass absolute left-6 top-1/2 -translate-y-1/2 text-[#999999] text-xl"></i>
+            <input
+              id="search-input"
+              type="text"
+              placeholder="궁금한 키워드를 입력하세요 (예: 예외 처리, 트랜잭션, 컴포넌트 분리)"
+              class="w-full h-[72px] bg-[#F5F5F7] rounded-2xl pl-[64px] pr-6 text-[18px] focus:outline-none focus:ring-2 focus:ring-black/5 transition-all"
+            >
+          </div>
+        </section>
+
+        <section class="grid grid-cols-2 gap-12 mb-[80px]">
+          <div>
+            <h3 class="text-[14px] font-bold text-[#999999] uppercase tracking-wider mb-4">분야 선택</h3>
+            <div id="field-buttons" class="flex gap-3"></div>
+          </div>
+          <div>
+            <h3 class="text-[14px] font-bold text-[#999999] uppercase tracking-wider mb-4">질문할 미션 선택</h3>
+            <div id="mission-buttons" class="flex gap-3 flex-wrap"></div>
+          </div>
+        </section>
+
         <section id="results-section">
           <div class="flex items-center justify-between mb-8">
             <h2 id="results-title" class="text-[24px] font-bold"></h2>
-            <div class="flex items-center gap-2 text-[14px] text-[#666666]">
+            <div id="sort-bar" class="hidden flex items-center gap-2 text-[14px] text-[#666666]">
               <span class="font-medium text-black">최신순</span>
               <span class="text-[#EEEEEE]">|</span>
               <span>정확도순</span>
@@ -47,180 +107,239 @@ function buildLayout() {
           </div>
         </section>
       </main>
-      ${buildFooter()}
+
+      <footer class="mt-[100px] border-t border-[#EEEEEE] px-[80px] py-[60px] bg-white">
+        <div class="flex justify-between items-start">
+          <div>
+            <div class="flex items-center gap-2 mb-6">
+              <div class="w-8 h-8 bg-black rounded-lg flex items-center justify-center">
+                <i class="fa-solid fa-code-pull-request text-white text-sm"></i>
+              </div>
+              <span class="text-lg font-bold">PR Insight</span>
+            </div>
+            <p class="text-[#999999] text-[14px]">© 2026 PR Insight. 모든 리뷰 데이터는 공개된 GitHub PR을 기반으로 합니다.</p>
+          </div>
+          <div class="flex gap-16">
+            <div>
+              <h4 class="font-bold mb-4">서비스</h4>
+              <ul class="text-[#666666] text-[14px] space-y-2">
+                <li><a href="#" class="hover:text-[#1A1A1A] transition-colors">미션 목록</a></li>
+                <li><a href="#" class="hover:text-[#1A1A1A] transition-colors">리뷰어 랭킹</a></li>
+                <li><a href="#" class="hover:text-[#1A1A1A] transition-colors">인사이트 리포트</a></li>
+              </ul>
+            </div>
+            <div>
+              <h4 class="font-bold mb-4">고객지원</h4>
+              <ul class="text-[#666666] text-[14px] space-y-2">
+                <li><a href="#" class="hover:text-[#1A1A1A] transition-colors">이용안내</a></li>
+                <li><a href="#" class="hover:text-[#1A1A1A] transition-colors">문의하기</a></li>
+                <li><a href="#" class="hover:text-[#1A1A1A] transition-colors">개인정보처리방침</a></li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </footer>
     </div>
   `;
 }
 
-function buildHeader() {
-  return `
-    <header class="sticky top-0 z-50 w-full h-[80px] bg-white/80 backdrop-blur-md border-b border-[#EEEEEE] flex items-center justify-between px-[80px]">
-      <div class="flex items-center gap-2">
-        <div class="w-10 h-10 bg-black rounded-xl flex items-center justify-center">
-          <i class="fa-solid fa-code-pull-request text-white text-xl"></i>
-        </div>
-        <span class="text-xl font-bold tracking-tight">PR Insight</span>
-      </div>
-      <nav class="flex items-center gap-8">
-        <a href="#" class="text-[15px] font-medium text-[#1A1A1A]">홈</a>
-        <a href="#" class="text-[15px] font-medium text-[#666666] hover:text-[#1A1A1A] transition-colors">탐색</a>
-        <a href="#" class="text-[15px] font-medium text-[#666666] hover:text-[#1A1A1A] transition-colors">내 북마크</a>
-        <div class="w-10 h-10 rounded-full overflow-hidden border border-[#EEEEEE]">
-          <img src="https://vinsign.app/resources/avatars/avatar-1.png" alt="사용자 프로필" class="w-full h-full object-cover">
-        </div>
-      </nav>
-    </header>
-  `;
-}
-
-function buildSearchSection() {
-  return `
-    <section class="mb-[64px]">
-      <h1 class="text-[42px] font-bold mb-4 leading-tight">리뷰어들은 이 질문에<br>어떻게 답변했을까요?</h1>
-      <p class="text-[18px] text-[#666666] mb-10">키워드를 입력하여 수천 개의 PR 속에 담긴 리뷰어의 인사이트를 찾아보세요.</p>
-      <div class="relative w-full max-w-[800px]">
-        <i class="fa-solid fa-magnifying-glass absolute left-6 top-1/2 -translate-y-1/2 text-[#999999] text-xl"></i>
-        <input
-          id="search-input"
-          type="text"
-          placeholder="궁금한 키워드를 입력하세요 (예: 예외 처리, 트랜잭션, 컴포넌트 분리)"
-          class="w-full h-[72px] bg-[#F5F5F7] rounded-2xl pl-[64px] pr-6 text-[18px] focus:outline-none focus:ring-2 focus:ring-black/5 transition-all"
-        >
-      </div>
-    </section>
-  `;
-}
-
-function buildFilterSection() {
-  return `
-    <section class="grid grid-cols-2 gap-12 mb-[80px]">
-      <div>
-        <h3 class="text-[14px] font-bold text-[#999999] uppercase tracking-wider mb-4">분야 선택</h3>
-        <div id="field-buttons" class="flex gap-3">${buildFieldButtons()}</div>
-      </div>
-      <div>
-        <h3 class="text-[14px] font-bold text-[#999999] uppercase tracking-wider mb-4">질문할 미션 선택</h3>
-        <div id="mission-buttons" class="flex gap-3">${buildMissionButtons()}</div>
-      </div>
-    </section>
-  `;
-}
+// ─── 필터 버튼 ───────────────────────────────────────────────────────────────
 
 function buildFieldButtons() {
-  return FIELDS.map(({ id, name }) => {
-    const active = state.field === id;
-    return `<button
-      data-field="${id}"
-      class="field-btn px-8 py-4 rounded-xl font-semibold text-[16px] transition-all ${
-        active
-          ? 'bg-black text-white'
-          : 'bg-white border border-[#EEEEEE] text-[#666666] hover:bg-[#F5F5F7]'
-      }"
-    >${name}</button>`;
-  }).join('');
+  return state.tracks
+    .map(({ track }) => {
+      const active = state.track === track;
+      return `<button
+        data-track="${track}"
+        class="field-btn px-8 py-4 rounded-xl font-semibold text-[16px] transition-all ${
+          active
+            ? 'bg-black text-white'
+            : 'bg-white border border-[#EEEEEE] text-[#666666] hover:bg-[#F5F5F7]'
+        }"
+      >${trackLabel(track)}</button>`;
+    })
+    .join('');
 }
 
 function buildMissionButtons() {
-  return MISSIONS.map(({ id, name, icon }) => {
-    const active = state.mission === id;
-    return `<button
-      data-mission="${id}"
-      class="mission-btn px-6 py-4 rounded-xl font-semibold text-[16px] flex items-center gap-2 transition-all ${
-        active
-          ? 'bg-[#F5F5F7] border border-transparent text-[#1A1A1A]'
-          : 'bg-white border border-[#EEEEEE] text-[#666666] hover:bg-[#F5F5F7]'
-      }"
-    >
-      <i class="fa-solid ${icon} text-[14px]"></i>
-      ${name}
-    </button>`;
-  }).join('');
-}
-
-function buildFooter() {
-  return `
-    <footer class="mt-[100px] border-t border-[#EEEEEE] px-[80px] py-[60px] bg-white">
-      <div class="flex justify-between items-start">
-        <div>
-          <div class="flex items-center gap-2 mb-6">
-            <div class="w-8 h-8 bg-black rounded-lg flex items-center justify-center">
-              <i class="fa-solid fa-code-pull-request text-white text-sm"></i>
-            </div>
-            <span class="text-lg font-bold">PR Insight</span>
-          </div>
-          <p class="text-[#999999] text-[14px]">© 2026 PR Insight. 모든 리뷰 데이터는 공개된 GitHub PR을 기반으로 합니다.</p>
-        </div>
-        <div class="flex gap-16">
-          <div>
-            <h4 class="font-bold mb-4">서비스</h4>
-            <ul class="text-[#666666] text-[14px] space-y-2">
-              <li><a href="#" class="hover:text-[#1A1A1A] transition-colors">미션 목록</a></li>
-              <li><a href="#" class="hover:text-[#1A1A1A] transition-colors">리뷰어 랭킹</a></li>
-              <li><a href="#" class="hover:text-[#1A1A1A] transition-colors">인사이트 리포트</a></li>
-            </ul>
-          </div>
-          <div>
-            <h4 class="font-bold mb-4">고객지원</h4>
-            <ul class="text-[#666666] text-[14px] space-y-2">
-              <li><a href="#" class="hover:text-[#1A1A1A] transition-colors">이용안내</a></li>
-              <li><a href="#" class="hover:text-[#1A1A1A] transition-colors">문의하기</a></li>
-              <li><a href="#" class="hover:text-[#1A1A1A] transition-colors">개인정보처리방침</a></li>
-            </ul>
-          </div>
-        </div>
-      </div>
-    </footer>
-  `;
-}
-
-// ─── 필터링 & 렌더링 ────────────────────────────────────────────────────────
-
-function getFilteredReviews() {
-  const keyword = state.search.toLowerCase();
-  return PR_REVIEWS.filter((review) => {
-    if (review.field !== state.field) return false;
-    if (state.mission && review.mission !== state.mission) return false;
-    if (keyword && !review.content.toLowerCase().includes(keyword)) return false;
-    return true;
-  });
-}
-
-function highlightKeyword(text, keyword) {
-  if (!keyword) return text;
-  const safePattern = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return text.replace(
-    new RegExp(`(${safePattern})`, 'gi'),
-    '<mark class="bg-yellow-100 font-medium rounded px-0.5">$1</mark>',
-  );
-}
-
-function buildCard(review) {
-  const avatars = review.reviewers
-    .map(
-      (r) =>
-        `<img src="${r.avatar}" class="w-12 h-12 rounded-full border-2 border-white ring-1 ring-gray-100" alt="${r.name}">`,
-    )
+  return state.missions
+    .map(({ name }) => {
+      const active = state.mission === name;
+      return `<button
+        data-mission="${name}"
+        class="mission-btn px-6 py-4 rounded-xl font-semibold text-[16px] flex items-center gap-2 transition-all ${
+          active
+            ? 'bg-[#F5F5F7] border border-transparent text-[#1A1A1A]'
+            : 'bg-white border border-[#EEEEEE] text-[#666666] hover:bg-[#F5F5F7]'
+        }"
+      >
+        <i class="fa-solid ${missionIcon(name)} text-[14px]"></i>
+        ${missionDisplayName(name)}
+      </button>`;
+    })
     .join('');
+}
 
-  const nameList = review.reviewers.map((r) => `'${r.name}'`).join(', ');
-  const content = highlightKeyword(review.content, state.search);
+function refreshFilterButtons() {
+  const fieldEl = document.getElementById('field-buttons');
+  const missionEl = document.getElementById('mission-buttons');
+  if (fieldEl) fieldEl.innerHTML = buildFieldButtons();
+  if (missionEl) missionEl.innerHTML = buildMissionButtons();
+}
+
+// ─── 검색 ────────────────────────────────────────────────────────────────────
+
+let searchAbortController = null;
+
+async function performSearch() {
+  if (!state.search) {
+    state.results = null;
+    state.error = null;
+    state.loading = false;
+    state.displayCount = PAGE_SIZE;
+    renderResults();
+    return;
+  }
+
+  if (searchAbortController) searchAbortController.abort();
+  searchAbortController = new AbortController();
+
+  state.loading = true;
+  state.error = null;
+  state.displayCount = PAGE_SIZE;
+  renderResults();
+
+  try {
+    const results = await searchReviews({
+      query: state.search,
+      track: state.track,
+      mission: state.mission,
+      limit: 50,
+    });
+    state.results = results;
+    state.loading = false;
+    renderResults();
+  } catch (e) {
+    if (e.name === 'AbortError') return;
+    state.loading = false;
+    state.error = e.message;
+    renderResults();
+  }
+}
+
+// ─── 렌더링 ─────────────────────────────────────────────────────────────────
+
+function renderResults() {
+  const titleEl = document.getElementById('results-title');
+  const sortBar = document.getElementById('sort-bar');
+  const gridEl = document.getElementById('results-grid');
+  const loadMoreBtn = document.getElementById('load-more-btn');
+
+  // 검색어 없음 — 초기 안내 화면
+  if (!state.search) {
+    titleEl.innerHTML = '';
+    sortBar.classList.add('hidden');
+    gridEl.innerHTML = `
+      <div class="py-20 text-center">
+        <i class="fa-solid fa-magnifying-glass text-5xl text-[#CCCCCC] mb-4 block"></i>
+        <p class="text-[18px] text-[#999999]">궁금한 키워드를 검색해 리뷰어의 인사이트를 확인해보세요.</p>
+      </div>
+    `;
+    loadMoreBtn.classList.add('hidden');
+    return;
+  }
+
+  // 로딩 중
+  if (state.loading) {
+    titleEl.innerHTML = `'${state.search}'에 대한 리뷰어의 답변`;
+    sortBar.classList.add('hidden');
+    gridEl.innerHTML = `
+      <div class="py-20 text-center">
+        <div class="w-10 h-10 border-2 border-black border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+        <p class="text-[18px] text-[#999999]">리뷰어의 인사이트를 불러오는 중...</p>
+      </div>
+    `;
+    loadMoreBtn.classList.add('hidden');
+    return;
+  }
+
+  // API 오류
+  if (state.error) {
+    titleEl.innerHTML = `'${state.search}'에 대한 리뷰어의 답변`;
+    sortBar.classList.add('hidden');
+    gridEl.innerHTML = `
+      <div class="py-20 text-center">
+        <i class="fa-solid fa-triangle-exclamation text-5xl text-[#CCCCCC] mb-4 block"></i>
+        <p class="text-[18px] text-[#999999]">검색 중 오류가 발생했습니다.</p>
+        <p class="text-[14px] text-[#CCCCCC] mt-2">${state.error}</p>
+      </div>
+    `;
+    loadMoreBtn.classList.add('hidden');
+    return;
+  }
+
+  if (!state.results) return;
+
+  const { query, totalGroups, groups } = state.results;
+  const visible = groups.slice(0, state.displayCount);
+
+  titleEl.innerHTML = `'${query}'에 대한 리뷰어의 답변 <span class="text-[#999999] ml-2">${totalGroups}</span>`;
+  sortBar.classList.remove('hidden');
+
+  if (visible.length === 0) {
+    gridEl.innerHTML = `
+      <div class="py-20 text-center">
+        <i class="fa-regular fa-comment-dots text-5xl text-[#CCCCCC] mb-4 block"></i>
+        <p class="text-[18px] text-[#999999]">해당 조건에 맞는 리뷰 데이터가 없습니다.</p>
+      </div>
+    `;
+  } else {
+    gridEl.innerHTML = visible.map(buildCard).join('');
+  }
+
+  loadMoreBtn.classList.toggle('hidden', groups.length <= state.displayCount);
+}
+
+function buildCard(group) {
+  const { reviewers = [], aiSummary, primaryGithubUrl, count, documents = [] } = group;
+
+  const avatars = reviewers.slice(0, 3).map((r) =>
+    r.avatarUrl
+      ? `<img src="${r.avatarUrl}" class="w-12 h-12 rounded-full border-2 border-white ring-1 ring-gray-100" alt="${r.id}">`
+      : `<div class="w-12 h-12 rounded-full border-2 border-white ring-1 ring-gray-100 bg-[#EEEEEE] flex items-center justify-center shrink-0">
+           <span class="text-[#999999] text-sm font-semibold">${r.id.slice(0, 2).toUpperCase()}</span>
+         </div>`,
+  ).join('');
+
+  const nameList = reviewers.map((r) => `'${r.id}'`).join(', ');
+  const missionSlug = documents[0]?.mission ?? '';
+  const missionName = missionSlug ? missionDisplayName(missionSlug) : '전체';
+  const content = highlightKeyword(aiSummary, state.search);
+
+  const reviewerLine = nameList
+    ? `이 질문에 대해 <span class="font-bold">${nameList}</span>님은 다음처럼 대답했어요`
+    : '이 질문에 대한 리뷰어 답변';
+
+  const defaultAvatar = !avatars
+    ? `<div class="w-12 h-12 rounded-full border-2 border-white ring-1 ring-gray-100 bg-[#EEEEEE] flex items-center justify-center">
+         <i class="fa-solid fa-users text-[#999999] text-sm"></i>
+       </div>`
+    : '';
 
   return `
     <div class="group p-8 bg-white border border-[#EEEEEE] rounded-[24px] hover:border-black hover:shadow-xl transition-all duration-300">
       <div class="flex items-start justify-between mb-6">
         <div class="flex items-center gap-4">
           <div class="flex -space-x-3">
-            ${avatars}
+            ${avatars || defaultAvatar}
           </div>
           <div>
-            <p class="text-[16px] text-[#1A1A1A]">
-              이 질문에 대해 <span class="font-bold">${nameList}</span>님은 다음처럼 대답했어요
-            </p>
-            <p class="text-[13px] text-[#999999] mt-0.5">${review.date} • ${review.missionName} 미션</p>
+            <p class="text-[16px] text-[#1A1A1A]">${reviewerLine}</p>
+            <p class="text-[13px] text-[#999999] mt-0.5">비슷한 답변 ${count}건 • ${missionName} 미션</p>
           </div>
         </div>
         <a
-          href="${review.prUrl}"
+          href="${primaryGithubUrl}"
           target="_blank"
           rel="noopener noreferrer"
           class="flex items-center gap-2 px-5 py-2.5 rounded-full bg-[#F5F5F7] text-[14px] font-semibold group-hover:bg-black group-hover:text-white transition-all whitespace-nowrap shrink-0"
@@ -238,43 +357,13 @@ function buildCard(review) {
   `;
 }
 
-function renderResults() {
-  const filtered = getFilteredReviews();
-  const visible = filtered.slice(0, state.displayCount);
-
-  // 결과 타이틀 업데이트
-  const fieldObj = FIELDS.find((f) => f.id === state.field);
-  const missionObj = MISSIONS.find((m) => m.id === state.mission);
-  const titleLabel = state.search
-    ? `'${state.search}'에 대한 리뷰어의 답변`
-    : missionObj
-      ? `'${missionObj.name}' 최신 리뷰어 답변`
-      : `'${fieldObj.name}' 최신 리뷰어 답변`;
-
-  document.getElementById('results-title').innerHTML =
-    `${titleLabel} <span class="text-[#999999] ml-2">${filtered.length}</span>`;
-
-  // 카드 렌더링
-  const grid = document.getElementById('results-grid');
-  if (visible.length === 0) {
-    grid.innerHTML = `
-      <div class="py-20 text-center">
-        <i class="fa-regular fa-comment-dots text-5xl text-[#CCCCCC] mb-4 block"></i>
-        <p class="text-[18px] text-[#999999]">해당 조건에 맞는 리뷰 데이터가 없습니다.</p>
-      </div>
-    `;
-  } else {
-    grid.innerHTML = visible.map(buildCard).join('');
-  }
-
-  // 더보기 버튼
-  const btn = document.getElementById('load-more-btn');
-  btn.classList.toggle('hidden', filtered.length <= state.displayCount);
-}
-
-function refreshFilterButtons() {
-  document.getElementById('field-buttons').innerHTML = buildFieldButtons();
-  document.getElementById('mission-buttons').innerHTML = buildMissionButtons();
+function highlightKeyword(text, keyword) {
+  if (!keyword || !text) return text ?? '';
+  const safePattern = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return text.replace(
+    new RegExp(`(${safePattern})`, 'gi'),
+    '<mark class="bg-yellow-100 font-medium rounded px-0.5">$1</mark>',
+  );
 }
 
 // ─── 이벤트 바인딩 ───────────────────────────────────────────────────────────
@@ -282,15 +371,17 @@ function refreshFilterButtons() {
 function attachEventListeners() {
   const app = document.getElementById('app');
 
-  app.addEventListener('click', (e) => {
-    const fieldBtn = e.target.closest('[data-field]');
-    if (fieldBtn) {
-      if (state.field !== fieldBtn.dataset.field) {
-        state.field = fieldBtn.dataset.field;
+  app.addEventListener('click', async (e) => {
+    const trackBtn = e.target.closest('[data-track]');
+    if (trackBtn) {
+      const newTrack = trackBtn.dataset.track;
+      if (state.track !== newTrack) {
+        state.track = newTrack;
         state.mission = null;
         state.displayCount = PAGE_SIZE;
         refreshFilterButtons();
-        renderResults();
+        await loadMissions();
+        if (state.search) performSearch();
       }
       return;
     }
@@ -301,7 +392,7 @@ function attachEventListeners() {
       state.mission = state.mission === clicked ? null : clicked;
       state.displayCount = PAGE_SIZE;
       refreshFilterButtons();
-      renderResults();
+      if (state.search) performSearch();
       return;
     }
 
@@ -317,8 +408,8 @@ function attachEventListeners() {
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       state.search = e.target.value.trim();
-      state.displayCount = PAGE_SIZE;
-      renderResults();
+      state.results = null;
+      performSearch();
     }, 300);
   });
 }
